@@ -501,3 +501,7 @@ class CriteoDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         # Trả về (x, t, y) — thứ tự khớp với training loop trong run_cevae_criteo.py
         return self.X[idx], self.t[idx], self.y[idx]
+
+
+# Alias tương đương
+CEVAEModel = CEVAE

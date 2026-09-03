@@ -1,0 +1,61 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# config.yaml — Cấu hình thí nghiệm cho Criteo Uplift Modeling Baselines
+# ══════════════════════════════════════════════════════════════════════════════
+# Sử dụng:
+#   python experiment/main.py --config experiment/config.yaml
+#   python experiment/main.py --config experiment/config.yaml --model cfrnet  # CLI override
+#
+# Ưu tiên: CLI args > config.yaml > default values trong argparse
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+data:
+  path: "data/criteo-uplift-v2.1.csv"   # Đường dẫn đến file Criteo CSV / CSV.gz
+  test_size: 0.1                         # Tỷ lệ tách test+val (0.1 → split 8:1:1)
+  val_ratio: 0.1111                      # Tỷ lệ val trong phần test_size (≈1/9)
+  seed: 42                               # Random seed cho reproducibility
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+model:
+  name: "tarnet"           # [tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | all]
+  input_dim: 12            # Số chiều feature đầu vào (12 cho Criteo f0..f11)
+  shared_dim: 200          # Số neuron trong shared representation
+  head_dim: 100            # Số neuron trong outcome heads
+
+# ── Training chung ────────────────────────────────────────────────────────────
+training:
+  epochs: 30               # Số epoch huấn luyện
+  batch_size: 4096         # Kích thước batch
+  lr: 0.001                # Learning rate (Adam)
+  weight_decay: 0.00001    # L2 regularization (weight decay)
+  patience: 5              # Số epoch chịu đựng không cải thiện (early stopping)
+  device: null             # "cpu" | "cuda" | "cuda:0" | null (auto-detect)
+
+# ── CFRNet ────────────────────────────────────────────────────────────────────
+cfrnet:
+  ipm_mode: "wass"         # Loại IPM: "mmd" (MMD Gaussian) hoặc "wass" (Sinkhorn–Wasserstein)
+  lambda_ipm: 1.0          # Trọng số của IPM loss
+
+# ── DragonNet ─────────────────────────────────────────────────────────────────
+dragonnet:
+  alpha: 1.0               # Trọng số của propensity BCE loss
+  beta: 1.0                # Trọng số của targeted regularisation loss
+
+# ── GANITE ────────────────────────────────────────────────────────────────────
+ganite:
+  h_dim: 64                # Hidden dim cho Generator / Discriminator / InferenceNet
+  epochs_gan: 5            # Số epoch Phase 1 (GAN training)
+  epochs_inf: null         # Số epoch Phase 2 (InferenceNet). null → dùng training.epochs
+  alpha: 1.0               # Trọng số adversarial loss trong Generator loss
+
+# ── CEVAE ─────────────────────────────────────────────────────────────────────
+cevae:
+  z_dim: 20                # Số chiều không gian tiềm ẩn z
+  n_hidden: 3              # Số lớp ẩn trong các sub-networks
+
+# ── Output ────────────────────────────────────────────────────────────────────
+output:
+  checkpoint_dir: "checkpoints"   # Thư mục lưu best model checkpoints
+  results_dir: "results"          # Thư mục lưu kết quả JSON
+  run_name: null                  # Tên run tuỳ chỉnh (null → auto: modelname_timestamp)
+  eval_k: 0.3                     # k cho Uplift@k (0.3 = top 30%)
+  verbose: 1                      # 0=silent | 1=epoch log | 2=+checkpoint log

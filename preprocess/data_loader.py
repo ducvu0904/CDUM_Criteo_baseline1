@@ -1,55 +1,74 @@
 """
-data_loader.py — Tiền xử lý và nạp dữ liệu Criteo Uplift v2.1
-===============================================================
+data_loader.py — Tiền xử lý và nạp dữ liệu Criteo Uplift v2.1 cho PyTorch
+=========================================================================
 Chức năng:
-  - load_dataset()       : đọc file .csv.gz, in thống kê cơ bản.
-  - split_dataset()      : chia train/val/test theo tỷ lệ 8:1:1.
-  - compute_denominators(): tính max value từng feature trên train set
-                            (dùng để bucket normalize trong model).
-  - make_data_generator(): generator vô hạn sinh batch (inputs, targets)
-                            cho Keras model.fit().
+  - load_dataset()    : đọc file .csv.gz / .csv, in thống kê cơ bản.
+  - split_dataset()   : chia train/val/test theo tỷ lệ (mặc định 8:1:1).
+  - get_dataloader()  : tạo PyTorch DataLoader từ (X, t, y) dùng TensorDataset.
+  - get_dataloaders() : tạo đồng thời train_loader, val_loader, test_loader.
 
 Dataset : Criteo Uplift v2.1 (~14M rows, 12 features, binary treatment)
 Columns : f0…f11 (numeric), treatment (0/1), visit (0/1)
 
 Môi trường yêu cầu:
-    pandas 2.3.3, numpy 1.26.4, scikit-learn 1.8.0
+    pandas, numpy, scikit-learn, torch
 """
 
 # ── Standard library ──────────────────────────────────────────────────────────
-import os
+from typing import Optional, Union, Tuple, List
 
 # ── Third-party ───────────────────────────────────────────────────────────────
 import numpy as np
 import pandas as pd
+import torch
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
+
+
+def _to_tensor(data: Union[np.ndarray, pd.DataFrame, pd.Series, torch.Tensor], dtype=torch.float32) -> torch.Tensor:
+    """Chuyển đổi DataFrame / Series / ndarray sang torch.Tensor float32."""
+    if isinstance(data, torch.Tensor):
+        return data.to(dtype=dtype)
+    elif isinstance(data, (pd.DataFrame, pd.Series)):
+        return torch.from_numpy(data.to_numpy(dtype=np.float32))
+    elif isinstance(data, np.ndarray):
+        return torch.from_numpy(data.astype(np.float32))
+    else:
+        return torch.tensor(data, dtype=dtype)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Load dataset
 # ══════════════════════════════════════════════════════════════════════════════
 
-def load_dataset(data_path, feature_cols, label_col, treat_col):
+def load_dataset(
+    data_path: str,
+    feature_cols: Optional[List[str]] = None,
+    label_col: str = "visit",
+    treat_col: str = "treatment",
+) -> pd.DataFrame:
     """
     Đọc file CSV (hoặc .csv.gz), in thống kê cơ bản và trả về DataFrame.
 
     Tham số
     -------
     data_path   : str  — đường dẫn file CSV / CSV.gz.
-    feature_cols: list — danh sách tên cột feature, VD ['f0', …, 'f11'].
-    label_col   : str  — tên cột nhãn (VD 'visit').
-    treat_col   : str  — tên cột treatment (VD 'treatment').
+    feature_cols: list — danh sách tên cột feature (mặc định ['f0', ..., 'f11'] nếu None).
+    label_col   : str  — tên cột nhãn kết quả (mặc định 'visit').
+    treat_col   : str  — tên cột treatment (mặc định 'treatment').
 
     Trả về
     ------
     df_all : pd.DataFrame — toàn bộ dataset.
     """
-    print(f'\n[load_dataset] Đang đọc: {data_path}')
+    if feature_cols is None:
+        feature_cols = [f"f{i}" for i in range(12)]
+
+    print(f"\n[load_dataset] Loading: {data_path}")
     df_all = pd.read_csv(data_path)
-    print(f'               Tổng số dòng : {len(df_all):,}')
-    print(f'               Các cột      : {list(df_all.columns)}')
-    print(f'               Treatment ratio (1/0): {df_all[treat_col].mean():.4f}')
-    print(f'               Positive rate ({label_col}): {df_all[label_col].mean():.4f}')
+    print(f"               Total rows : {len(df_all):,}")
+    print(f"               Treatment ratio (1/0): {df_all[treat_col].mean():.4f}")
+    print(f"               Positive rate ({label_col}): {df_all[label_col].mean():.4f}")
     return df_all
 
 
@@ -57,104 +76,141 @@ def load_dataset(data_path, feature_cols, label_col, treat_col):
 # Train / Val / Test split
 # ══════════════════════════════════════════════════════════════════════════════
 
-def split_dataset(df_all, feature_cols, label_col, treat_col,
-                  test_size=0.2, val_ratio=0.5, random_state=42):
+def split_dataset(
+    df_all: pd.DataFrame,
+    feature_cols: Optional[List[str]] = None,
+    label_col: str = "visit",
+    treat_col: str = "treatment",
+    test_size: float = 0.1,
+    val_ratio: float = 1/9,
+    random_state: int = 42,
+) -> Tuple[pd.DataFrame, pd.Series, pd.Series,
+           pd.DataFrame, pd.Series, pd.Series,
+           pd.DataFrame, pd.Series, pd.Series]:
     """
-    Chia dataset theo tỷ lệ 8:1:1 (train : val : test).
+    Chia dataset theo tỷ lệ (mặc định 8:1:1 train : val : test).
 
     Tham số
     -------
     df_all       : pd.DataFrame — toàn bộ dataset từ load_dataset().
-    feature_cols : list — danh sách tên cột feature.
-    label_col    : str  — tên cột nhãn.
-    treat_col    : str  — tên cột treatment.
-    test_size    : float — tỷ lệ dữ liệu tách ra khỏi train (mặc định 0.2 → 20%).
-    val_ratio    : float — tỷ lệ chia val từ phần test_size (mặc định 0.5 → 50%).
-    random_state : int  — seed để đảm bảo reproducibility.
+    feature_cols : list  — danh sách tên cột feature (mặc định ['f0'...'f11']).
+    label_col    : str   — tên cột nhãn (mặc định 'visit').
+    treat_col    : str   — tên cột treatment (mặc định 'treatment').
+    test_size    : float — tỷ lệ tách ra khỏi train (0.2 -> 20% cho val+test).
+    val_ratio    : float — tỷ lệ chia val từ phần test_size (0.5 -> val chiếm 10%, test 10%).
+    random_state : int   — seed để tái lập kết quả.
 
     Trả về
     ------
     (x_train, y_train, t_train,
      x_val,   y_val,   t_val,
-     x_test,  y_test,  t_test,
-     denominators)
-
-    denominators : list — giá trị max từng feature trên train set.
+     x_test,  y_test,  t_test)
     """
-    print(f'\n[split_dataset] Chia dữ liệu 8:1:1 ...')
-    df_train, df_tmp  = train_test_split(df_all, test_size=test_size,
-                                         random_state=random_state)
-    df_val,   df_test = train_test_split(df_tmp, test_size=val_ratio,
-                                         random_state=random_state)
-    print(f'                train={len(df_train):,}  val={len(df_val):,}  test={len(df_test):,}')
+    if feature_cols is None:
+        feature_cols = [f"f{i}" for i in range(12)]
 
-    denominators = compute_denominators(df_train, feature_cols)
+    print(f"\n[split_dataset] Splitting data ...")
+    df_train, df_tmp = train_test_split(
+        df_all, test_size=test_size, random_state=random_state
+    )
+    df_val, df_test = train_test_split(
+        df_tmp, test_size=val_ratio, random_state=random_state
+    )
+    print(f"                train={len(df_train):,}  val={len(df_val):,}  test={len(df_test):,}")
 
     x_train = df_train[feature_cols]; y_train = df_train[label_col]; t_train = df_train[treat_col]
     x_val   = df_val[feature_cols];   y_val   = df_val[label_col];   t_val   = df_val[treat_col]
     x_test  = df_test[feature_cols];  y_test  = df_test[label_col];  t_test  = df_test[treat_col]
 
-    return (x_train, y_train, t_train,
-            x_val,   y_val,   t_val,
-            x_test,  y_test,  t_test,
-            denominators)
+    return (
+        x_train, y_train, t_train,
+        x_val,   y_val,   t_val,
+        x_test,  y_test,  t_test,
+    )
+
+
+def compute_denominators(df_train: pd.DataFrame, feature_cols: List[str]) -> List[float]:
+    """Tính giá trị max từng feature trên train set để dùng cho bucket normalization nếu cần."""
+    return [float(df_train[f].max()) for f in feature_cols]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Feature denominators
+# PyTorch DataLoader Helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
-def compute_denominators(df_train, feature_cols):
+def get_dataloader(
+    X: Union[np.ndarray, pd.DataFrame, torch.Tensor],
+    t: Union[np.ndarray, pd.Series, torch.Tensor],
+    y: Union[np.ndarray, pd.Series, torch.Tensor],
+    batch_size: int = 2048,
+    shuffle: bool = True,
+    num_workers: int = 4,
+    pin_memory: bool = True,
+) -> DataLoader:
     """
-    Tính giá trị max từng feature trên train set để dùng cho bucket normalization.
-
-    Chỉ dùng train set để tránh data leakage từ val/test.
+    Tạo PyTorch DataLoader trực tiếp từ (X, t, y) dùng TensorDataset.
 
     Tham số
     -------
-    df_train     : pd.DataFrame — tập train.
-    feature_cols : list — danh sách tên cột feature.
+    X           : features (DataFrame, ndarray, hoặc Tensor).
+    t           : treatment indicator (Series, ndarray, hoặc Tensor).
+    y           : outcome label (Series, ndarray, hoặc Tensor).
+    batch_size  : kích thước batch.
+    shuffle     : có xáo trộn mẫu hay không (mặc định True cho train, False cho val/test).
+    num_workers : số tiến trình nạp dữ liệu song song (mặc định 0).
+    pin_memory  : có pin memory sang GPU không (mặc định False).
 
     Trả về
     ------
-    denominators : list of float — max value theo thứ tự feature_cols.
+    DataLoader trả về từng batch (x_batch, t_batch, y_batch) dạng float32.
     """
-    denominators = [df_train[f].max() for f in feature_cols]
-    return denominators
+    dataset = TensorDataset(_to_tensor(X), _to_tensor(t), _to_tensor(y))
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Keras data generator
-# ══════════════════════════════════════════════════════════════════════════════
-
-def make_data_generator(data, batch_size, features):
+def get_dataloaders(
+    x_train: Union[np.ndarray, pd.DataFrame],
+    t_train: Union[np.ndarray, pd.Series],
+    y_train: Union[np.ndarray, pd.Series],
+    x_val: Optional[Union[np.ndarray, pd.DataFrame]] = None,
+    t_val: Optional[Union[np.ndarray, pd.Series]] = None,
+    y_val: Optional[Union[np.ndarray, pd.Series]] = None,
+    x_test: Optional[Union[np.ndarray, pd.DataFrame]] = None,
+    t_test: Optional[Union[np.ndarray, pd.Series]] = None,
+    y_test: Optional[Union[np.ndarray, pd.Series]] = None,
+    batch_size: int = 2048,
+    num_workers: int = 0,
+) -> Tuple[DataLoader, Optional[DataLoader], Optional[DataLoader]]:
     """
-    Generator vô hạn (infinite) sinh ra các batch (inputs, targets) cho Keras.
+    Tạo nhanh bộ DataLoaders (train, val, test) cho quá trình huấn luyện PyTorch.
 
-    Tham số
-    -------
-    data      : [X_df, y_series, treatment_series]
-    batch_size: kích thước batch
-    features  : danh sách tên cột feature
-
-    Yields
+    Trả về
     ------
-    (input_list, [treat_label, ctrl_label])
-        input_list  = [feat_0_array, …, feat_11_array, treatment_mask_array]
-        treat_label = y * treatment_mask          (chỉ có giá trị khi treatment=1)
-        ctrl_label  = y * (1 − treatment_mask)    (chỉ có giá trị khi treatment=0)
-
-    Dùng với model.fit(generator, steps_per_epoch=...) để Keras tự dừng
-    sau steps_per_epoch bước trong mỗi epoch.
+    (train_loader, val_loader, test_loader)
     """
-    X_df, y_s, t_s = data
-    n = X_df.shape[0]
-    while True:
-        for offset in range(0, n, batch_size):
-            X_batch = X_df.iloc[offset: offset + batch_size]
-            mask    = t_s.iloc[offset: offset + batch_size].values
-            label   = y_s.iloc[offset: offset + batch_size].values
+    train_loader = get_dataloader(
+        x_train, t_train, y_train,
+        batch_size=batch_size, shuffle=True, num_workers=num_workers
+    )
 
-            feat_arrays = [np.array(X_batch[col].tolist()) for col in features]
-            feat_arrays.append(mask)   # treatment indicator là input cuối cùng
-            yield feat_arrays, [label * mask, label * (1 - mask)]
+    val_loader = None
+    if x_val is not None and t_val is not None and y_val is not None:
+        val_loader = get_dataloader(
+            x_val, t_val, y_val,
+            batch_size=batch_size, shuffle=False, num_workers=num_workers
+        )
+
+    test_loader = None
+    if x_test is not None and t_test is not None and y_test is not None:
+        test_loader = get_dataloader(
+            x_test, t_test, y_test,
+            batch_size=batch_size, shuffle=False, num_workers=num_workers
+        )
+
+    return train_loader, val_loader, test_loader
