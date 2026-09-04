@@ -16,7 +16,7 @@ data:
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 model:
-  name: "tarnet"           # [tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | all]
+  name: "tarnet"           # [tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | all]
   input_dim: 12            # Số chiều feature đầu vào (12 cho Criteo f0..f11)
   shared_dim: 200          # Số neuron trong shared representation
   head_dim: 100            # Số neuron trong outcome heads
@@ -29,6 +29,12 @@ training:
   weight_decay: 0.00001    # L2 regularization (weight decay)
   patience: 5              # Số epoch chịu đựng không cải thiện (early stopping)
   device: null             # "cpu" | "cuda" | "cuda:0" | null (auto-detect)
+
+# ── EFIN ──────────────────────────────────────────────────────────────────────
+efin:
+  embed_dim: 64            # K_d: số chiều embedding của features (Table 2: 32, 64, 128)
+  lambda_c: 0.01           # Trọng số của intervention constraint loss (Table 2: 1e-5..1e-1)
+  loss_type: "bce"         # "bce" | "mse"
 
 # ── CFRNet ────────────────────────────────────────────────────────────────────
 cfrnet:

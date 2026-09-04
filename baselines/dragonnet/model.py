@@ -114,7 +114,8 @@ class DragonNetModel(nn.Module):
         y: torch.Tensor,
         alpha: float = 1.0,
         beta: float = 1.0,
-    ) -> torch.Tensor:
+        return_components: bool = False,
+    ):
         """
         DragonNet Loss:
             L_factual    = BCE(y_hat_factual, y)
@@ -125,8 +126,9 @@ class DragonNetModel(nn.Module):
 
         Tham số
         -------
-        alpha : trọng số của propensity loss.
-        beta  : trọng số của targeted regularisation loss.
+        alpha             : trọng số của propensity loss.
+        beta              : trọng số của targeted regularisation loss.
+        return_components : nếu True, trả về (total_loss, dict các thành phần loss).
         """
         y0_logit, y1_logit, y0_prob, y1_prob, prop_logit, prop_prob, eps = self.forward(x)
 
@@ -148,7 +150,15 @@ class DragonNetModel(nn.Module):
         targeted_residual = y - y_hat + eps_col * (t - prop_prob)
         l_targeted = targeted_residual.pow(2).mean()
 
-        return l_factual + alpha * l_propensity + beta * l_targeted
+        total_loss = l_factual + alpha * l_propensity + beta * l_targeted
+
+        if return_components:
+            return total_loss, {
+                "base_loss": l_factual,
+                "propensity_loss": l_propensity,
+                "targeted_reg": l_targeted,
+            }
+        return total_loss
 
     @torch.no_grad()
     def predict_uplift(self, x: torch.Tensor):

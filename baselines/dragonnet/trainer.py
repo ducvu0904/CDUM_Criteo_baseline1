@@ -95,10 +95,15 @@ class DRAGONNET:
             self.optimizer, mode="min", factor=0.5, patience=2, min_lr=1e-6
         )
 
-    def train_epoch(self, dataloader: DataLoader) -> float:
-        """Huấn luyện 1 epoch và trả về mean DragonNet loss."""
+    def train_epoch(
+        self,
+        dataloader: DataLoader,
+        return_components: bool = False,
+    ) -> Union[float, Tuple[float, Dict[str, float]]]:
+        """Huấn luyện 1 epoch và trả về mean DragonNet loss cùng các thành phần (nếu return_components=True)."""
         self.model.train()
         total_loss = 0.0
+        comp_totals = {"base_loss": 0.0, "propensity_loss": 0.0, "targeted_reg": 0.0}
         n_batches = 0
 
         for x_b, t_b, y_b in dataloader:
@@ -107,14 +112,24 @@ class DRAGONNET:
             y_b = y_b.to(self.device)
 
             self.optimizer.zero_grad()
-            loss = self.model.compute_loss(x_b, t_b, y_b, alpha=self.alpha, beta=self.beta)
+            loss, comps = self.model.compute_loss(
+                x_b, t_b, y_b, alpha=self.alpha, beta=self.beta, return_components=True
+            )
             loss.backward()
             self.optimizer.step()
 
             total_loss += loss.item()
+            for k, v in comps.items():
+                comp_totals[k] += v.item()
             n_batches += 1
 
-        return total_loss / max(n_batches, 1)
+        denom = max(n_batches, 1)
+        mean_loss = total_loss / denom
+        comp_means = {k: v / denom for k, v in comp_totals.items()}
+
+        if return_components:
+            return mean_loss, comp_means
+        return mean_loss
 
     def validate(self, val_loader: DataLoader) -> float:
         """Validation: Tính nhanh DragonNet loss trên val_loader."""
@@ -214,13 +229,23 @@ class DRAGONNET:
             )
 
         for epoch in range(1, epochs + 1):
-            train_loss = self.train_epoch(train_loader)
+            train_loss, train_comps = self.train_epoch(train_loader, return_components=True)
             history["train_loss"].append(train_loss)
+            for k, v in train_comps.items():
+                history.setdefault(k, []).append(v)
 
             if writer is not None:
                 writer.add_scalar("Loss/train", train_loss, epoch)
+                writer.add_scalar("Loss/train_base", train_comps["base_loss"], epoch)
+                writer.add_scalar("Loss/train_propensity", train_comps["propensity_loss"], epoch)
+                writer.add_scalar("Loss/train_targeted_reg", train_comps["targeted_reg"], epoch)
 
-            log_msg = f"Epoch [{epoch:02d}/{epochs:02d}]  Train Loss: {train_loss:.5f}"
+            log_msg = (
+                f"Epoch [{epoch:02d}/{epochs:02d}]  Train Loss: {train_loss:.5f} "
+                f"(Base: {train_comps['base_loss']:.5f}, "
+                f"Propensity: {train_comps['propensity_loss']:.5f}, "
+                f"Targeted Reg: {train_comps['targeted_reg']:.5f})"
+            )
 
             if val_loader is not None:
                 val_loss = self.validate(val_loader)

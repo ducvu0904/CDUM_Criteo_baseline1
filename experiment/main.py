@@ -8,7 +8,7 @@ Sử dụng:
     python experiment/main.py --model all --epochs 20 --batch_size 4096
 
 Models có thể chọn (--model):
-    tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | all
+    tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | all
 
 Ưu tiên: CLI args > config.yaml > default values
 
@@ -34,7 +34,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from preprocess.data_loader import load_dataset, split_dataset, get_dataloaders
-from baselines import TARNET, CEVAE, DESCN, EUEN, GANITE, DRAGONNET, CFRNET
+from baselines import TARNET, CEVAE, DESCN, EUEN, GANITE, DRAGONNET, CFRNET, EFIN
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-ALL_MODELS = ["tarnet", "cevae", "descn", "euen", "ganite", "dragonnet", "cfrnet"]
+ALL_MODELS = ["tarnet", "cevae", "descn", "euen", "ganite", "dragonnet", "cfrnet", "efin"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -61,6 +61,7 @@ def load_yaml_config(config_path: str) -> dict:
         "model":     {"name": "model", "input_dim": "input_dim", "shared_dim": "shared_dim", "head_dim": "head_dim"},
         "training":  {"epochs": "epochs", "batch_size": "batch_size", "lr": "lr",
                       "weight_decay": "weight_decay", "patience": "patience", "device": "device"},
+        "efin":      {"embed_dim": "efin_embed_dim", "lambda_c": "efin_lambda_c", "loss_type": "efin_loss_type"},
         "cfrnet":    {"ipm_mode": "ipm_mode", "lambda_ipm": "lambda_ipm"},
         "dragonnet": {"alpha": "alpha", "beta": "beta"},
         "ganite":    {"h_dim": "h_dim", "epochs_gan": "epochs_gan", "epochs_inf": "epochs_inf", "alpha": "gan_alpha"},
@@ -132,6 +133,15 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Shared representation dimension.")
     mdl.add_argument("--head_dim", type=int, default=100,
                      help="Outcome head hidden dimension.")
+
+    # ── EFIN-specific ─────────────────────────────────────────────────────────
+    efn = p.add_argument_group("EFIN options")
+    efn.add_argument("--efin_embed_dim", type=int, default=64,
+                     help="Embedding dimension K_d for EFIN.")
+    efn.add_argument("--efin_lambda_c", type=float, default=0.01,
+                     help="Intervention constraint loss weight for EFIN.")
+    efn.add_argument("--efin_loss_type", type=str, default="bce", choices=["bce", "mse"],
+                     help="Loss type for EFIN ('bce' or 'mse').")
 
     # ── CFRNET-specific ───────────────────────────────────────────────────────
     cfr = p.add_argument_group("CFRNet options")
@@ -251,6 +261,16 @@ def build_model(model_name: str, args: argparse.Namespace):
             head_dim=args.head_dim,
             mode=args.ipm_mode,
             lambda_ipm=args.lambda_ipm,
+            **common
+        )
+
+    elif model_name == "efin":
+        return EFIN(
+            embed_dim=getattr(args, "efin_embed_dim", 64),
+            shared_dim=args.shared_dim,
+            head_dim=args.head_dim,
+            lambda_c=getattr(args, "efin_lambda_c", 0.01),
+            loss_type=getattr(args, "efin_loss_type", "bce"),
             **common
         )
 

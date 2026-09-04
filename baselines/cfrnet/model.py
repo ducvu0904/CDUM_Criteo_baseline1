@@ -114,22 +114,24 @@ class CFRNetModel(nn.Module):
         x: torch.Tensor,
         t: torch.Tensor,
         y: torch.Tensor,
+        return_components: bool = False,
         **ipm_kwargs,
-    ) -> torch.Tensor:
+    ):
         """
         CFRNet Loss:
             L = BCE(ŷ_factual, y) + lambda_ipm * IPM(φ[T=1], φ[T=0])
 
         Tham số
         -------
-        x          : (n, d) features
-        t          : (n,) treatment indicator (0/1)
-        y          : (n,) observed outcome (0/1)
-        **ipm_kwargs: tham số tùy chọn cho IPM (sigma / p / n_iter / reg)
+        x                 : (n, d) features
+        t                 : (n,) treatment indicator (0/1)
+        y                 : (n,) observed outcome (0/1)
+        return_components : nếu True, trả về (total_loss, dict các thành phần loss)
+        **ipm_kwargs      : tham số tùy chọn cho IPM (sigma / p / n_iter / reg)
 
         Trả về
         ------
-        loss : scalar Tensor
+        loss : scalar Tensor hoặc tuple (scalar Tensor, dict)
         """
         phi, y0_logit, y1_logit, _, _ = self.forward(x)
 
@@ -143,7 +145,14 @@ class CFRNetModel(nn.Module):
         # IPM loss (mode và kwargs được quyết định lúc khởi tạo / gọi)
         l_ipm = compute_ipm(phi, t, mode=self.mode, **ipm_kwargs)
 
-        return l_factual + self.lambda_ipm * l_ipm
+        total_loss = l_factual + self.lambda_ipm * l_ipm
+
+        if return_components:
+            return total_loss, {
+                "base_loss": l_factual,
+                "ipm_loss": l_ipm,
+            }
+        return total_loss
 
     @torch.no_grad()
     def predict_uplift(self, x: torch.Tensor):

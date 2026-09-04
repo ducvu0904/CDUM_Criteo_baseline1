@@ -1,18 +1,19 @@
 """
-trainer.py — Trainer cho CFRNET (Counterfactual Regression Network)
-====================================================================
+trainer.py — Trainer cho EFIN (Criteo Uplift v2.1)
+===================================================
 Trainer nhận DataLoaders từ bước preprocess (preprocess/data_loader.py).
-Không tạo DataLoader bên trong trainer để phân định rõ ràng trách nhiệm.
+Không tạo DataLoader bên trong trainer để phân định rõ ràng trách nhiệm:
+  - preprocess: tạo Dataset & DataLoader
+  - trainer: tiếp nhận DataLoader để huấn luyện, validate, evaluate, predict
 
-Hỗ trợ 2 loại IPM regulariser:
-  - mode='mmd'  → CFR-MMD  (Maximum Mean Discrepancy)
-  - mode='wass' → CFR-WASS (Sinkhorn–Wasserstein, theo Shalit et al. 2017)
+Mô hình:
+  Liu et al., "Explicit Feature Interaction-aware Uplift Network for Online Marketing" (KDD 2023)
 """
 
+import logging
 import os
 import sys
-import logging
-from typing import Optional, Union, Tuple, Dict, Any
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -25,25 +26,33 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 try:
-    from .model import CFRNetModel
+    from .model import EFINModel
 except ImportError:
-    from baselines.cfrnet.model import CFRNetModel
+    from baselines.efin.model import EFINModel
 
 try:
-    from metrics.uplift_metrics import uplift_auc_score1, qini_auc_score1, uplift_at_k1
+    from metrics.uplift_metrics import (
+        qini_auc_score1,
+        uplift_at_k1,
+        uplift_auc_score1,
+    )
+
     HAS_METRICS = True
 except ImportError:
     HAS_METRICS = False
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s  %(levelname)-8s  %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
 
 
-def _to_numpy(data: Union[np.ndarray, pd.DataFrame, pd.Series, torch.Tensor], dtype=np.float32) -> np.ndarray:
+def _to_numpy(
+    data: Union[np.ndarray, pd.DataFrame, pd.Series, torch.Tensor],
+    dtype=np.float32,
+) -> np.ndarray:
     if isinstance(data, (pd.DataFrame, pd.Series)):
         return data.to_numpy(dtype=dtype)
     elif isinstance(data, torch.Tensor):
@@ -54,49 +63,70 @@ def _to_numpy(data: Union[np.ndarray, pd.DataFrame, pd.Series, torch.Tensor], dt
         return np.asarray(data, dtype=dtype)
 
 
-class CFRNET:
+class EFIN:
     """
-    Trainer cho mô hình CFRNET (CFR-MMD hoặc CFR-WASS).
+    Trainer cho mô hình EFIN (Explicit Feature Interaction-aware Uplift Network).
     Nhận DataLoader trực tiếp từ bước preprocess.
 
     Tham số
     -------
-    mode       : 'mmd' hoặc 'wass' — loại IPM regulariser.
-    lambda_ipm : trọng số của IPM loss.
+    model          : Optional[nn.Module] — instance EFINModel có sẵn nếu có.
+    input_dim      : int   — số chiều feature đầu vào (12 cho Criteo).
+    embed_dim      : int   — số chiều embedding K_d (mặc định 64).
+    num_treatments : int   — số nhóm treatment (mặc định 2).
+    shared_dim     : int   — số neuron lớp ẩn cho Self-Interaction MLP (mặc định 128).
+    head_dim       : int   — số neuron lớp ẩn cho các head MLP (mặc định 64).
+    attn_dim       : int   — số chiều ẩn cho attention tương tác treatment (mặc định 64).
+    lambda_c       : float — trọng số mất mát của Intervention Constraint Module (mặc định 0.01).
+    loss_type      : str   — loại hàm mất mát ('bce' hoặc 'mse', mặc định 'bce').
+    detach_y0      : bool  — có cô lập gradient ŷ(0) khi tính ŷ(k) không (mặc định True).
+    lr             : float — learning rate (mặc định 1e-3).
+    weight_decay   : float — L2 regularization (mặc định 1e-5).
+    device         : Optional[Union[str, torch.device]] — thiết bị tính toán.
     """
 
     def __init__(
         self,
         model: Optional[nn.Module] = None,
         input_dim: int = 12,
-        shared_dim: int = 200,
-        head_dim: int = 100,
-        mode: str = "wass",
-        lambda_ipm: float = 1.0,
+        embed_dim: int = 64,
+        num_treatments: int = 2,
+        shared_dim: int = 128,
+        head_dim: int = 64,
+        attn_dim: int = 64,
+        lambda_c: float = 0.01,
+        loss_type: str = "bce",
+        detach_y0: bool = True,
         lr: float = 1e-3,
         weight_decay: float = 1e-5,
         device: Optional[Union[str, torch.device]] = None,
     ):
         if device is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.device = torch.device(
+                "cuda" if torch.cuda.is_available() else "cpu"
+            )
         else:
             self.device = torch.device(device)
 
         if model is None:
-            self.model = CFRNetModel(
+            self.model = EFINModel(
                 input_dim=input_dim,
+                embed_dim=embed_dim,
+                num_treatments=num_treatments,
                 shared_dim=shared_dim,
                 head_dim=head_dim,
-                mode=mode,
-                lambda_ipm=lambda_ipm,
+                attn_dim=attn_dim,
+                detach_y0=detach_y0,
             ).to(self.device)
         else:
             self.model = model.to(self.device)
 
-        self.mode = self.model.mode
+        self.lambda_c = lambda_c
+        self.loss_type = loss_type
         self.lr = lr
         self.weight_decay = weight_decay
-        self.optimizer = torch.optim.Adam(
+
+        self.optimizer = torch.optim.AdamW(
             self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay
         )
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -108,10 +138,10 @@ class CFRNET:
         dataloader: DataLoader,
         return_components: bool = False,
     ) -> Union[float, Tuple[float, Dict[str, float]]]:
-        """Huấn luyện 1 epoch và trả về mean CFRNet loss (factual + IPM) cùng các thành phần (nếu return_components=True)."""
+        """Huấn luyện 1 epoch và trả về mean EFIN loss cùng các thành phần (nếu return_components=True)."""
         self.model.train()
         total_loss = 0.0
-        comp_totals = {"base_loss": 0.0, "ipm_loss": 0.0}
+        comp_totals = {"loss_s": 0.0, "loss_t": 0.0, "loss_c": 0.0}
         n_batches = 0
 
         for x_b, t_b, y_b in dataloader:
@@ -120,13 +150,20 @@ class CFRNET:
             y_b = y_b.to(self.device)
 
             self.optimizer.zero_grad()
-            loss, comps = self.model.compute_loss(x_b, t_b, y_b, return_components=True)
+            loss, comps = self.model.compute_loss(
+                x=x_b,
+                t=t_b,
+                y=y_b,
+                lambda_c=self.lambda_c,
+                loss_type=self.loss_type,
+                return_components=True,
+            )
             loss.backward()
             self.optimizer.step()
 
             total_loss += loss.item()
-            for k, v in comps.items():
-                comp_totals[k] += v.item()
+            for k in comp_totals:
+                comp_totals[k] += comps[k].item()
             n_batches += 1
 
         denom = max(n_batches, 1)
@@ -138,7 +175,7 @@ class CFRNET:
         return mean_loss
 
     def validate(self, val_loader: DataLoader) -> float:
-        """Validation: Tính nhanh CFRNet loss trên val_loader."""
+        """Validation: Tính nhanh EFIN loss trên val_loader."""
         self.model.eval()
         total_loss = 0.0
         n_batches = 0
@@ -149,7 +186,13 @@ class CFRNET:
                 t_b = t_b.to(self.device)
                 y_b = y_b.to(self.device)
 
-                loss = self.model.compute_loss(x_b, t_b, y_b)
+                loss = self.model.compute_loss(
+                    x=x_b,
+                    t=t_b,
+                    y=y_b,
+                    lambda_c=self.lambda_c,
+                    loss_type=self.loss_type,
+                )
                 total_loss += loss.item()
                 n_batches += 1
 
@@ -160,7 +203,7 @@ class CFRNET:
         test_loader: DataLoader,
         k: float = 0.3,
     ) -> Dict[str, float]:
-        """Evaluation: Đánh giá toàn diện trên test_loader (Loss, AUUC, Qini, Lift@k)."""
+        """Evaluation: Đánh giá toàn diện trên test_loader từ bước preprocess."""
         self.model.eval()
         total_loss = 0.0
         n_batches = 0
@@ -172,11 +215,19 @@ class CFRNET:
                 t_b_dev = t_b.to(self.device)
                 y_b_dev = y_b.to(self.device)
 
-                loss = self.model.compute_loss(x_b_dev, t_b_dev, y_b_dev)
+                loss = self.model.compute_loss(
+                    x=x_b_dev,
+                    t=t_b_dev,
+                    y=y_b_dev,
+                    lambda_c=self.lambda_c,
+                    loss_type=self.loss_type,
+                )
                 total_loss += loss.item()
                 n_batches += 1
 
-                y0_prob, y1_prob = self.model.predict_uplift(x_b_dev)
+                y0_prob, y1_prob = self.model.predict_uplift(
+                    x_b_dev, loss_type=self.loss_type
+                )
                 uplift_b = (y1_prob - y0_prob).cpu().numpy()
 
                 all_uplifts.append(uplift_b)
@@ -192,18 +243,24 @@ class CFRNET:
             y_arr = np.concatenate(all_y, axis=0)
 
             try:
-                results["auuc"] = float(uplift_auc_score1(y_arr, uplift_scores, t_arr))
+                results["auuc"] = float(
+                    uplift_auc_score1(y_arr, uplift_scores, t_arr)
+                )
             except Exception as e:
                 logger.warning(f"Failed to compute AUUC: {e}")
 
             try:
-                results["qini"] = float(qini_auc_score1(y_arr, uplift_scores, t_arr))
+                results["qini"] = float(
+                    qini_auc_score1(y_arr, uplift_scores, t_arr)
+                )
             except Exception as e:
                 logger.warning(f"Failed to compute Qini: {e}")
 
             try:
                 results[f"lift@{int(k*100)}%"] = float(
-                    uplift_at_k1(y_arr, uplift_scores, t_arr, strategy="overall", k=k)
+                    uplift_at_k1(
+                        y_arr, uplift_scores, t_arr, strategy="overall", k=k
+                    )
                 )
             except Exception as e:
                 logger.warning(f"Failed to compute Uplift@{k}: {e}")
@@ -217,11 +274,11 @@ class CFRNET:
         epochs: int = 10,
         early_stopping_patience: int = 3,
         checkpoint_dir: Optional[str] = None,
-        model_name: str = "cfrnet",
+        model_name: str = "efin",
         writer: Optional[Any] = None,
         verbose: int = 1,
     ) -> Dict[str, list]:
-        """Huấn luyện mô hình CFRNET bằng DataLoaders truyền vào trực tiếp."""
+        """Huấn luyện mô hình EFIN bằng DataLoaders truyền vào trực tiếp."""
         history = {"train_loss": [], "val_loss": []}
         best_val_loss = float("inf")
         patience_counter = 0
@@ -231,26 +288,28 @@ class CFRNET:
 
         if verbose:
             logger.info(
-                f"Starting CFRNET [{self.mode.upper()}] training | "
-                f"Device: {self.device} | Epochs: {epochs} | "
-                f"lambda_ipm: {self.model.lambda_ipm}"
+                f"Starting EFIN training | Device: {self.device} | Epochs: {epochs} | lambda_c: {self.lambda_c}"
             )
 
         for epoch in range(1, epochs + 1):
-            train_loss, train_comps = self.train_epoch(train_loader, return_components=True)
+            train_loss, train_comps = self.train_epoch(
+                train_loader, return_components=True
+            )
             history["train_loss"].append(train_loss)
             for k, v in train_comps.items():
                 history.setdefault(k, []).append(v)
 
             if writer is not None:
                 writer.add_scalar("Loss/train", train_loss, epoch)
-                writer.add_scalar("Loss/train_base", train_comps["base_loss"], epoch)
-                writer.add_scalar("Loss/train_ipm", train_comps["ipm_loss"], epoch)
+                writer.add_scalar("Loss/train_self", train_comps["loss_s"], epoch)
+                writer.add_scalar("Loss/train_treat", train_comps["loss_t"], epoch)
+                writer.add_scalar("Loss/train_constraint", train_comps["loss_c"], epoch)
 
             log_msg = (
                 f"Epoch [{epoch:02d}/{epochs:02d}]  Train Loss: {train_loss:.5f} "
-                f"(Base: {train_comps['base_loss']:.5f}, "
-                f"IPM [{self.mode.upper()}]: {train_comps['ipm_loss']:.5f})"
+                f"(Self L_S: {train_comps['loss_s']:.5f}, "
+                f"Treat L_T: {train_comps['loss_t']:.5f}, "
+                f"Constraint L_C: {train_comps['loss_c']:.5f})"
             )
 
             if val_loader is not None:
@@ -269,21 +328,26 @@ class CFRNET:
                     best_val_loss = val_loss
                     patience_counter = 0
                     if checkpoint_dir is not None:
-                        ckpt_best = os.path.join(checkpoint_dir, f"{model_name}_best.pth")
+                        ckpt_best = os.path.join(
+                            checkpoint_dir, f"{model_name}_best.pth"
+                        )
                         self.save(ckpt_best)
                         if verbose >= 2:
-                            logger.info(f"  -> Saved best checkpoint: {ckpt_best}")
+                            logger.info(
+                                f"  -> Saved best checkpoint: {ckpt_best}"
+                            )
                 else:
                     patience_counter += 1
                     if patience_counter >= early_stopping_patience:
                         if verbose:
-                            logger.info(f"Early stopping triggered at epoch {epoch}!")
+                            logger.info(
+                                f"Early stopping triggered at epoch {epoch}!"
+                            )
                         break
 
             if verbose:
                 logger.info(log_msg)
 
-        # Lưu checkpoint cuối cùng
         if checkpoint_dir is not None:
             ckpt_final = os.path.join(checkpoint_dir, f"{model_name}_final.pth")
             self.save(ckpt_final)
@@ -303,7 +367,7 @@ class CFRNET:
         data: Union[DataLoader, torch.Tensor, np.ndarray, pd.DataFrame],
         batch_size: int = 4096,
     ) -> np.ndarray:
-        """Dự đoán uplift score tau = y1_prob - y0_prob."""
+        """Dự đoán uplift score tau = y1 - y0."""
         self.model.eval()
         uplift_preds = []
 
@@ -311,16 +375,51 @@ class CFRNET:
             for batch in data:
                 x_b = batch[0] if isinstance(batch, (list, tuple)) else batch
                 x_b = x_b.to(self.device)
-                y0_prob, y1_prob = self.model.predict_uplift(x_b)
+                y0_prob, y1_prob = self.model.predict_uplift(
+                    x_b, loss_type=self.loss_type
+                )
                 uplift_preds.append((y1_prob - y0_prob).cpu().numpy())
         else:
             X_arr = _to_numpy(data)
-            for offset in range(0, len(X_arr), batch_size):
-                batch_x = torch.from_numpy(X_arr[offset: offset + batch_size]).to(self.device)
-                y0_prob, y1_prob = self.model.predict_uplift(batch_x)
+            n_samples = len(X_arr)
+            for offset in range(0, n_samples, batch_size):
+                batch_x = torch.from_numpy(
+                    X_arr[offset : offset + batch_size]
+                ).to(self.device)
+                y0_prob, y1_prob = self.model.predict_uplift(
+                    batch_x, loss_type=self.loss_type
+                )
                 uplift_preds.append((y1_prob - y0_prob).cpu().numpy())
 
         return np.concatenate(uplift_preds, axis=0)
+
+    @torch.no_grad()
+    def predict_tau(
+        self,
+        data: Union[DataLoader, torch.Tensor, np.ndarray, pd.DataFrame],
+        batch_size: int = 4096,
+    ) -> np.ndarray:
+        """Trích xuất trực tiếp ước lượng ITE tau_hat từ Treatment-Aware Module."""
+        self.model.eval()
+        tau_preds = []
+
+        if isinstance(data, DataLoader):
+            for batch in data:
+                x_b = batch[0] if isinstance(batch, (list, tuple)) else batch
+                x_b = x_b.to(self.device)
+                tau = self.model.predict_tau(x_b)
+                tau_preds.append(tau.cpu().numpy())
+        else:
+            X_arr = _to_numpy(data)
+            n_samples = len(X_arr)
+            for offset in range(0, n_samples, batch_size):
+                batch_x = torch.from_numpy(
+                    X_arr[offset : offset + batch_size]
+                ).to(self.device)
+                tau = self.model.predict_tau(batch_x)
+                tau_preds.append(tau.cpu().numpy())
+
+        return np.concatenate(tau_preds, axis=0)
 
     @torch.no_grad()
     def predict_outcomes(
@@ -336,18 +435,53 @@ class CFRNET:
             for batch in data:
                 x_b = batch[0] if isinstance(batch, (list, tuple)) else batch
                 x_b = x_b.to(self.device)
-                y0_prob, y1_prob = self.model.predict_uplift(x_b)
+                y0_prob, y1_prob = self.model.predict_uplift(
+                    x_b, loss_type=self.loss_type
+                )
                 y0_preds.append(y0_prob.cpu().numpy())
                 y1_preds.append(y1_prob.cpu().numpy())
         else:
             X_arr = _to_numpy(data)
-            for offset in range(0, len(X_arr), batch_size):
-                batch_x = torch.from_numpy(X_arr[offset: offset + batch_size]).to(self.device)
-                y0_prob, y1_prob = self.model.predict_uplift(batch_x)
+            n_samples = len(X_arr)
+            for offset in range(0, n_samples, batch_size):
+                batch_x = torch.from_numpy(
+                    X_arr[offset : offset + batch_size]
+                ).to(self.device)
+                y0_prob, y1_prob = self.model.predict_uplift(
+                    batch_x, loss_type=self.loss_type
+                )
                 y0_preds.append(y0_prob.cpu().numpy())
                 y1_preds.append(y1_prob.cpu().numpy())
 
         return np.concatenate(y0_preds, axis=0), np.concatenate(y1_preds, axis=0)
+
+    @torch.no_grad()
+    def get_feature_importance(
+        self,
+        data: Union[DataLoader, torch.Tensor, np.ndarray, pd.DataFrame],
+        batch_size: int = 4096,
+    ) -> np.ndarray:
+        """Lấy attention weights của từng feature nhạy cảm với treatment."""
+        self.model.eval()
+        weights = []
+
+        if isinstance(data, DataLoader):
+            for batch in data:
+                x_b = batch[0] if isinstance(batch, (list, tuple)) else batch
+                x_b = x_b.to(self.device)
+                alpha = self.model.get_feature_importance(x_b)
+                weights.append(alpha.cpu().numpy())
+        else:
+            X_arr = _to_numpy(data)
+            n_samples = len(X_arr)
+            for offset in range(0, n_samples, batch_size):
+                batch_x = torch.from_numpy(
+                    X_arr[offset : offset + batch_size]
+                ).to(self.device)
+                alpha = self.model.get_feature_importance(batch_x)
+                weights.append(alpha.cpu().numpy())
+
+        return np.concatenate(weights, axis=0)
 
     def save(self, path: str) -> None:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)

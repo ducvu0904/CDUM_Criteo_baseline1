@@ -21,9 +21,9 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 try:
-    from .model import CEVAE
+    from .model import CEVAE as CEVAEModel
 except ImportError:
-    from baselines.cevae.model import CEVAE
+    from baselines.cevae.model import CEVAE as CEVAEModel
 
 try:
     from metrics.uplift_metrics import uplift_auc_score1, qini_auc_score1, uplift_at_k1
@@ -74,7 +74,7 @@ class CEVAE:
             self.device = torch.device(device)
 
         if model is None:
-            self.model = CEVAE(
+            self.model = CEVAEModel(
                 n_features=input_dim,
                 z_dim=z_dim,
                 hidden_dim=hidden_dim,

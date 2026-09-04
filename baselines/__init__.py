@@ -5,6 +5,7 @@ from .euen import EUEN
 from .ganite import GANITE
 from .dragonnet import DRAGONNET
 from .cfrnet import CFRNET
+from .efin import EFIN
 
 __all__ = [
     "TARNET",
@@ -14,4 +15,6 @@ __all__ = [
     "GANITE",
     "DRAGONNET",
     "CFRNET",
+    "EFIN",
 ]
+
