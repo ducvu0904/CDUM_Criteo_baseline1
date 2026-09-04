@@ -68,6 +68,9 @@ class DRAGONNET:
         beta: float = 1.0,
         lr: float = 1e-3,
         weight_decay: float = 1e-5,
+        lr_factor: float = 0.5,
+        lr_patience: int = 2,
+        min_lr: float = 1e-6,
         device: Optional[Union[str, torch.device]] = None,
     ):
         if device is None:
@@ -88,11 +91,14 @@ class DRAGONNET:
         self.beta = beta
         self.lr = lr
         self.weight_decay = weight_decay
+        self.lr_factor = lr_factor
+        self.lr_patience = lr_patience
+        self.min_lr = min_lr
         self.optimizer = torch.optim.Adam(
             self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay
         )
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode="min", factor=0.5, patience=2, min_lr=1e-6
+            self.optimizer, mode="min", factor=self.lr_factor, patience=self.lr_patience, min_lr=self.min_lr
         )
 
     def train_epoch(
@@ -240,6 +246,7 @@ class DRAGONNET:
                 writer.add_scalar("Loss/train_propensity", train_comps["propensity_loss"], epoch)
                 writer.add_scalar("Loss/train_targeted_reg", train_comps["targeted_reg"], epoch)
 
+            current_lr = self.optimizer.param_groups[0]["lr"]
             log_msg = (
                 f"Epoch [{epoch:02d}/{epochs:02d}]  Train Loss: {train_loss:.5f} "
                 f"(Base: {train_comps['base_loss']:.5f}, "
@@ -252,7 +259,6 @@ class DRAGONNET:
                 history["val_loss"].append(val_loss)
                 log_msg += f" | Val Loss: {val_loss:.5f}"
 
-                current_lr = self.optimizer.param_groups[0]["lr"]
                 if writer is not None:
                     writer.add_scalar("Loss/val", val_loss, epoch)
                     writer.add_scalar("LearningRate", current_lr, epoch)
@@ -269,13 +275,19 @@ class DRAGONNET:
                             logger.info(f"  -> Saved best checkpoint: {ckpt_best}")
                 else:
                     patience_counter += 1
-                    if patience_counter >= early_stopping_patience:
-                        if verbose:
-                            logger.info(f"Early stopping triggered at epoch {epoch}!")
-                        break
 
-            if verbose:
-                logger.info(log_msg)
+                log_msg += f" | LR: {current_lr:.6f} | EarlyStop: {patience_counter}/{early_stopping_patience}"
+                if verbose:
+                    logger.info(log_msg)
+
+                if patience_counter >= early_stopping_patience:
+                    if verbose:
+                        logger.info(f"Early stopping triggered at epoch {epoch}!")
+                    break
+            else:
+                log_msg += f" | LR: {current_lr:.6f}"
+                if verbose:
+                    logger.info(log_msg)
 
         # Lưu checkpoint cuối cùng
         if checkpoint_dir is not None:

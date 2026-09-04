@@ -9,26 +9,31 @@
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 data:
-  path: "data/criteo-uplift-v2.1.csv"   # Đường dẫn đến file Criteo CSV / CSV.gz
-  test_size: 0.1                         # Tỷ lệ tách test+val (0.1 → split 8:1:1)
-  val_ratio: 0.1111                      # Tỷ lệ val trong phần test_size (≈1/9)
-  seed: 42                               # Random seed cho reproducibility
+  path: "/home/ducvu0904/Documents/dataset/Criteo"   # Thư mục chứa pre-split Criteo dataset (.pt / .csv)
+  label_col: "visit"                                 # Target outcome: "visit" hoặc "conversion"
+  num_workers: 4                                     # Số workers cho DataLoader
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 model:
   name: "tarnet"           # [tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | all]
   input_dim: 12            # Số chiều feature đầu vào (12 cho Criteo f0..f11)
-  shared_dim: 200          # Số neuron trong shared representation
-  head_dim: 100            # Số neuron trong outcome heads
+  shared_dim: 64          # Số neuron trong shared representation
+  head_dim: 32            # Số neuron trong outcome heads
 
 # ── Training chung ────────────────────────────────────────────────────────────
 training:
-  epochs: 30               # Số epoch huấn luyện
+  epochs: 50              # Số epoch huấn luyện
   batch_size: 4096         # Kích thước batch
   lr: 0.001                # Learning rate (Adam)
+  lr_factor: 0.6           # Tỉ lệ giảm learning rate khi gặp plateau (ReduceLROnPlateau)
+  lr_patience: 2           # Số epoch kiên nhẫn trước khi giảm lr
+  min_lr: 0.000001         # Learning rate tối thiểu
   weight_decay: 0.00001    # L2 regularization (weight decay)
   patience: 5              # Số epoch chịu đựng không cải thiện (early stopping)
   device: null             # "cpu" | "cuda" | "cuda:0" | null (auto-detect)
+  seeds: [1, 2, 3, 4, 5]   # Danh sách các random seeds (1-5) đánh giá độ ổn định
+  parallel: 1              # Số models chạy đồng thời (1 = tuần tự, 2+ = song song)
+  gpus: null               # Danh sách GPU IDs (vd: [0], [0, 1]) hoặc null (auto-detect)
 
 # ── EFIN ──────────────────────────────────────────────────────────────────────
 efin:
@@ -38,7 +43,7 @@ efin:
 
 # ── CFRNet ────────────────────────────────────────────────────────────────────
 cfrnet:
-  ipm_mode: "wass"         # Loại IPM: "mmd" (MMD Gaussian) hoặc "wass" (Sinkhorn–Wasserstein)
+  ipm_mode: "mmd"         # Loại IPM: "mmd" (MMD Gaussian) hoặc "wass" (Sinkhorn–Wasserstein)
   lambda_ipm: 1.0          # Trọng số của IPM loss
 
 # ── DragonNet ─────────────────────────────────────────────────────────────────

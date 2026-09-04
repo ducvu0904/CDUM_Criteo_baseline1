@@ -1,19 +1,24 @@
 """
-preprocess/ — Tiền xử lý dữ liệu Criteo Uplift v2.1
-Exports: load_dataset, split_dataset, compute_denominators, get_dataloader, get_dataloaders
+preprocess/ — Preprocessing and DataLoader module for Criteo Uplift v2.1
+Exports: CriteoDataset, load_split, get_dataloader, get_dataloaders, compute_denominators, load_dataset, split_dataset
 """
 from preprocess.data_loader import (
-    load_dataset,
-    split_dataset,
-    compute_denominators,
+    CriteoDataset,
+    load_split,
     get_dataloader,
     get_dataloaders,
+    compute_denominators,
+    load_dataset,
+    split_dataset,
 )
 
 __all__ = [
-    "load_dataset",
-    "split_dataset",
-    "compute_denominators",
+    "CriteoDataset",
+    "load_split",
     "get_dataloader",
     "get_dataloaders",
+    "compute_denominators",
+    "load_dataset",
+    "split_dataset",
 ]
+
