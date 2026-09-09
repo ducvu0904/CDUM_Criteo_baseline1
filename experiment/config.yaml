@@ -15,7 +15,7 @@ data:
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 model:
-  name: "tarnet"           # [tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | all]
+  name: "tarnet"           # [tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | slearner | tlearner | all]
   input_dim: 12            # Số chiều feature đầu vào (12 cho Criteo f0..f11)
   shared_dim: 64          # Số neuron trong shared representation
   head_dim: 32            # Số neuron trong outcome heads

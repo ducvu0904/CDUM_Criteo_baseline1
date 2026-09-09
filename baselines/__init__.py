@@ -6,6 +6,8 @@ from .ganite import GANITE
 from .dragonnet import DRAGONNET
 from .cfrnet import CFRNET
 from .efin import EFIN
+from .slearner import SLEARNER
+from .tlearner import TLEARNER
 
 __all__ = [
     "TARNET",
@@ -16,5 +18,8 @@ __all__ = [
     "DRAGONNET",
     "CFRNET",
     "EFIN",
+    "SLEARNER",
+    "TLEARNER",
 ]
+
 

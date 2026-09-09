@@ -50,7 +50,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from preprocess.data_loader import get_dataloaders
-from baselines import TARNET, CEVAE, DESCN, EUEN, GANITE, DRAGONNET, CFRNET, EFIN
+from baselines import TARNET, CEVAE, DESCN, EUEN, GANITE, DRAGONNET, CFRNET, EFIN, SLEARNER, TLEARNER
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,7 +59,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-ALL_MODELS = ["tarnet", "cevae", "descn", "euen", "ganite", "dragonnet", "cfrnet", "efin"]
+ALL_MODELS = ["tarnet", "cevae", "descn", "euen", "ganite", "dragonnet", "cfrnet", "efin", "slearner", "tlearner"]
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -150,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ── Model ─────────────────────────────────────────────────────────────────
     mdl = p.add_argument_group("Model")
     mdl.add_argument("--model", type=str, default="tarnet",
-                     help="Model to train. Options: tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | all. "
+                     help="Model to train. Options: tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | slearner | tlearner | all. "
                           "Can also be comma-separated, e.g. 'tarnet,cfrnet'.")
     mdl.add_argument("--models", type=str, nargs="+", default=None,
                      help="Optional list of multiple models to run (e.g. --models tarnet cfrnet dragonnet). Overrides --model.")
@@ -319,6 +320,21 @@ def build_model(model_name: str, args: argparse.Namespace):
             loss_type=getattr(args, "efin_loss_type", "bce"),
             **common
         )
+
+    elif model_name == "slearner":
+        return SLEARNER(
+            shared_dim=args.shared_dim,
+            head_dim=args.head_dim,
+            **common
+        )
+
+    elif model_name == "tlearner":
+        return TLEARNER(
+            shared_dim=args.shared_dim,
+            head_dim=args.head_dim,
+            **common
+        )
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Seed & CSV helpers
