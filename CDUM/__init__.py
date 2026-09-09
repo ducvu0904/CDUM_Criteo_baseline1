@@ -1,6 +1,5 @@
-"""
-CDUM/  — Kiến trúc CPM module
-Exports: DNN, activation_layer, UpliftModel
-"""
-from CDUM.layers import DNN, activation_layer
-from CDUM.model import UpliftModel
+"""CPM training package."""
+
+from .trainer import CPMTrainer
+
+__all__ = ["CPMTrainer"]
