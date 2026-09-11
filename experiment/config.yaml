@@ -23,12 +23,12 @@ model:
 # ── Training chung ────────────────────────────────────────────────────────────
 training:
   epochs: 50              # Số epoch huấn luyện
-  batch_size: 4096         # Kích thước batch
-  lr: 0.001                # Learning rate (Adam)
+  batch_size: 4096         # Kích thước batch (batch_size = 4096)
+  lr: 0.001                # Learning rate: Adam(lr=0.001)
   lr_factor: 0.6           # Tỉ lệ giảm learning rate khi gặp plateau (ReduceLROnPlateau)
   lr_patience: 2           # Số epoch kiên nhẫn trước khi giảm lr
   min_lr: 0.000001         # Learning rate tối thiểu
-  weight_decay: 0.00001    # L2 regularization (weight decay)
+  weight_decay: 0.00001    # L2 regularization: 1e-5
   patience: 5              # Số epoch chịu đựng không cải thiện (early stopping)
   device: null             # "cpu" | "cuda" | "cuda:0" | null (auto-detect)
   seeds: [1, 2, 3, 4, 5]   # Danh sách các random seeds (1-5) đánh giá độ ổn định
@@ -67,15 +67,21 @@ cevae:
 # Paper: "Coarse-to-fine Dynamic Uplift Modeling" (arXiv:2410.16755)
 # Section 5.1.4 Parameter Settings
 cpm:
-  num_features: 12           # f_x: số features đầu vào (12 cho Criteo f0..f11)           [paper]
-  num_bins: 100              # Số bins cho equidistant bucketing (continuous → sparse)     [not in paper]
-  embedding_dim: 32          # d: embedding dimension                                      [paper: 32]
-  num_experts: 3             # M: số expert modules trong CPM                              [paper: 3]
-  expert_hidden_dim: 64      # Số neuron hidden layer trong mỗi Expert MLP                [not in paper]
-  expert_dim: 32             # d_expert: output dim của mỗi Expert                        [not in paper]
-  refine_hidden_dim: 64      # d_h: hidden dim của Treatment Refine (guidance/indicator)   [not in paper]
-  refine_dim: 64             # d*: output dim của guidance/indicator embedding             [not in paper]
-  huber_delta: 1.0           # δ: Huber loss delta                                         [paper: 1]
+  num_features: 12           # f_x: số features đầu vào (12 cho Criteo f0..f11)
+  num_bins: 100              # Số bins cho equidistant bucketing
+  embedding_dim: 32          # d: embedding dimension = 32
+  seq_len: 10                # Sequence length = 10
+  num_experts: 3             # Number of experts = 3
+  expert_hidden_dim: 128     # Expert network hidden unit 1 (128) -> Expert hidden units: (128, 64)
+  expert_dim: 64             # Expert network hidden unit 2 / output representation (64)
+  tower_hidden_dim: 32       # Tower network hidden units: (32,)
+  refine_hidden_dim: 64      # Hidden dim của Treatment Refine
+  refine_dim: 32             # Output dim của indicator embedding (= tower hidden dim 32)
+  activation: "relu"         # Activation: relu
+  dropout_rate: 0.0          # Dropout rate: 0
+  batch_norm: false          # Batch normalization: False
+  l2_reg: 0.00001            # L2 regularization: 1e-5
+  huber_delta: 1.0           # δ: Huber loss delta = 1.0
 
 # ── Output ────────────────────────────────────────────────────────────────────
 output:

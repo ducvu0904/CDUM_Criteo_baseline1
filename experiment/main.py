@@ -13,7 +13,7 @@ Chạy song song (Parallel Runs để giảm thời gian huấn luyện):
     python experiment/main.py --model tarnet,cfrnet --parallel 2 --gpus 0
 
 Models có thể chọn (--model / --models):
-    tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | all
+    tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | slearner | tlearner | cdum | all
 
 Ưu tiên: CLI args > config.yaml > default values
 
@@ -50,7 +50,10 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from preprocess.data_loader import get_dataloaders
+from preprocess.cpm_processor import EquidistantBucketer
 from baselines import TARNET, CEVAE, DESCN, EUEN, GANITE, DRAGONNET, CFRNET, EFIN, SLEARNER, TLEARNER
+from CDUM import CPMTrainer
+from CDUM.cpm import CPM
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,7 +62,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-ALL_MODELS = ["tarnet", "cevae", "descn", "euen", "ganite", "dragonnet", "cfrnet", "efin", "slearner", "tlearner"]
+ALL_MODELS = ["tarnet", "cevae", "descn", "euen", "ganite", "dragonnet", "cfrnet", "efin", "slearner", "tlearner", "cdum"]
 
 
 
@@ -87,6 +90,22 @@ def load_yaml_config(config_path: str) -> dict:
         "dragonnet": {"alpha": "alpha", "beta": "beta"},
         "ganite":    {"h_dim": "h_dim", "epochs_gan": "epochs_gan", "epochs_inf": "epochs_inf", "alpha": "gan_alpha"},
         "cevae":     {"z_dim": "z_dim", "n_hidden": "n_hidden"},
+        "cpm":       {"num_features": "cpm_num_features", "num_bins": "cpm_num_bins",
+                      "embedding_dim": "cpm_embedding_dim", "num_experts": "cpm_num_experts",
+                      "expert_hidden_dim": "cpm_expert_hidden_dim", "expert_dim": "cpm_expert_dim",
+                      "tower_hidden_dim": "cpm_tower_hidden_dim",
+                      "refine_hidden_dim": "cpm_refine_hidden_dim", "refine_dim": "cpm_refine_dim",
+                      "huber_delta": "cpm_huber_delta", "seq_len": "cpm_seq_len",
+                      "activation": "cpm_activation", "dropout_rate": "cpm_dropout",
+                      "batch_norm": "cpm_batch_norm", "l2_reg": "cpm_weight_decay"},
+        "cdum":      {"num_features": "cpm_num_features", "num_bins": "cpm_num_bins",
+                      "embedding_dim": "cpm_embedding_dim", "num_experts": "cpm_num_experts",
+                      "expert_hidden_dim": "cpm_expert_hidden_dim", "expert_dim": "cpm_expert_dim",
+                      "tower_hidden_dim": "cpm_tower_hidden_dim",
+                      "refine_hidden_dim": "cpm_refine_hidden_dim", "refine_dim": "cpm_refine_dim",
+                      "huber_delta": "cpm_huber_delta", "seq_len": "cpm_seq_len",
+                      "activation": "cpm_activation", "dropout_rate": "cpm_dropout",
+                      "batch_norm": "cpm_batch_norm", "l2_reg": "cpm_weight_decay"},
         "output":    {"checkpoint_dir": "checkpoint_dir", "results_dir": "results_dir",
                       "run_name": "run_name", "eval_k": "eval_k", "verbose": "verbose"},
     }
@@ -151,7 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ── Model ─────────────────────────────────────────────────────────────────
     mdl = p.add_argument_group("Model")
     mdl.add_argument("--model", type=str, default="tarnet",
-                     help="Model to train. Options: tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | slearner | tlearner | all. "
+                     help="Model to train. Options: tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | slearner | tlearner | cdum | all. "
                           "Can also be comma-separated, e.g. 'tarnet,cfrnet'.")
     mdl.add_argument("--models", type=str, nargs="+", default=None,
                      help="Optional list of multiple models to run (e.g. --models tarnet cfrnet dragonnet). Overrides --model.")
@@ -202,6 +221,39 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Latent dimension z for CEVAE.")
     vae.add_argument("--n_hidden", type=int, default=3,
                      help="Number of hidden layers for CEVAE sub-networks.")
+
+    # ── CDUM / CPM-specific ───────────────────────────────────────────────────
+    cdm = p.add_argument_group("CDUM / CPM options")
+    cdm.add_argument("--cpm_num_features", "--cdum_num_features", dest="cpm_num_features", type=int, default=None,
+                     help="Number of input features for CDUM (defaults to --input_dim).")
+    cdm.add_argument("--cpm_num_bins", "--cdum_num_bins", dest="cpm_num_bins", type=int, default=100,
+                     help="Number of bins for equidistant bucketing in CDUM.")
+    cdm.add_argument("--cpm_embedding_dim", "--cdum_embedding_dim", dest="cpm_embedding_dim", type=int, default=32,
+                     help="Feature and treatment embedding dimension for CDUM.")
+    cdm.add_argument("--cpm_seq_len", "--cdum_seq_len", dest="cpm_seq_len", type=int, default=10,
+                     help="Sequence length for CDUM.")
+    cdm.add_argument("--cpm_num_experts", "--cdum_num_experts", dest="cpm_num_experts", type=int, default=3,
+                     help="Number of expert modules for CDUM.")
+    cdm.add_argument("--cpm_expert_hidden_dim", "--cdum_expert_hidden_dim", dest="cpm_expert_hidden_dim", type=int, default=128,
+                     help="Hidden dimension of user experts for CDUM (Expert hidden unit 1).")
+    cdm.add_argument("--cpm_expert_dim", "--cdum_expert_dim", dest="cpm_expert_dim", type=int, default=64,
+                     help="Output dimension of user experts for CDUM (Expert hidden unit 2).")
+    cdm.add_argument("--cpm_tower_hidden_dim", "--cdum_tower_hidden_dim", dest="cpm_tower_hidden_dim", type=int, default=32,
+                     help="Hidden dimension of treatment towers for CDUM (Tower hidden unit).")
+    cdm.add_argument("--cpm_refine_hidden_dim", "--cdum_refine_hidden_dim", dest="cpm_refine_hidden_dim", type=int, default=64,
+                     help="Hidden dimension for treatment refine in CDUM.")
+    cdm.add_argument("--cpm_refine_dim", "--cdum_refine_dim", dest="cpm_refine_dim", type=int, default=32,
+                     help="Output guidance/indicator dimension for CDUM.")
+    cdm.add_argument("--cpm_activation", "--cdum_activation", dest="cpm_activation", type=str, default="relu",
+                     help="Activation function for CDUM.")
+    cdm.add_argument("--cpm_dropout", "--cdum_dropout", dest="cpm_dropout", type=float, default=0.0,
+                     help="Dropout rate for CDUM.")
+    cdm.add_argument("--cpm_batch_norm", "--cdum_batch_norm", dest="cpm_batch_norm", action="store_true", default=False,
+                     help="Enable batch normalization for CDUM.")
+    cdm.add_argument("--cpm_weight_decay", "--cdum_weight_decay", dest="cpm_weight_decay", type=float, default=None,
+                     help="L2 regularization (weight decay) for CDUM (defaults to --weight_decay: 1e-5).")
+    cdm.add_argument("--cpm_huber_delta", "--cdum_huber_delta", dest="cpm_huber_delta", type=float, default=1.0,
+                     help="Huber loss delta for CDUM.")
 
     # ── Training ──────────────────────────────────────────────────────────────
     trn = p.add_argument_group("Training")
@@ -335,6 +387,51 @@ def build_model(model_name: str, args: argparse.Namespace):
             **common
         )
 
+    elif model_name.lower() in ("cdum", "cpm"):
+        num_features = getattr(args, "cpm_num_features", None) or args.input_dim
+        num_bins = getattr(args, "cpm_num_bins", 100)
+        embedding_dim = getattr(args, "cpm_embedding_dim", 32)
+        refine_hidden_dim = getattr(args, "cpm_refine_hidden_dim", 64)
+        refine_dim = getattr(args, "cpm_refine_dim", 32)
+        num_experts = getattr(args, "cpm_num_experts", 3)
+        expert_hidden_dim = getattr(args, "cpm_expert_hidden_dim", 128)
+        expert_dim = getattr(args, "cpm_expert_dim", 64)
+        tower_hidden_dim = getattr(args, "cpm_tower_hidden_dim", 32)
+        activation = getattr(args, "cpm_activation", "relu")
+        dropout_rate = getattr(args, "cpm_dropout", 0.0)
+        use_bn = getattr(args, "cpm_batch_norm", False)
+        huber_delta = getattr(args, "cpm_huber_delta", 1.0)
+        cpm_weight_decay = getattr(args, "cpm_weight_decay", None)
+        weight_decay = cpm_weight_decay if cpm_weight_decay is not None else getattr(args, "weight_decay", 1e-5)
+
+        model = CPM(
+            num_features=num_features,
+            num_bins=num_bins,
+            embedding_dim=embedding_dim,
+            refine_hidden_dim=refine_hidden_dim,
+            refine_dim=refine_dim,
+            num_experts=num_experts,
+            expert_hidden_dim=expert_hidden_dim,
+            expert_dim=expert_dim,
+            tower_hidden_dim=tower_hidden_dim,
+            activation=activation,
+            dropout_rate=dropout_rate,
+            use_bn=use_bn,
+        )
+        trainer = CPMTrainer(
+            model=model,
+            lr=args.lr,
+            weight_decay=weight_decay,
+            lr_factor=getattr(args, "lr_factor", 0.5),
+            lr_patience=getattr(args, "lr_patience", 2),
+            min_lr=getattr(args, "min_lr", 1e-6),
+            device=args.device,
+        )
+        if huber_delta != 1.0:
+            import torch.nn as nn
+            trainer.criterion = nn.HuberLoss(delta=huber_delta)
+        return trainer
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Seed & CSV helpers
@@ -406,6 +503,75 @@ def update_summary_csv(summary_csv_path: str, model_name: str, summary_dict: dic
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# DataLoader Wrapper for CDUM / CPM (Equidistant Bucketing)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class BucketedDataLoader:
+    """
+    Wrapper quanh DataLoader để bucketize continuous features thành discrete bucket IDs
+    cho CPM / CDUM on-the-fly mà không làm thay đổi DataLoader gốc của các baseline khác.
+    """
+    def __init__(self, dataloader, bucketer: EquidistantBucketer):
+        self.dataloader = dataloader
+        self.bucketer = bucketer
+
+    def __iter__(self):
+        for batch in self.dataloader:
+            if isinstance(batch, (list, tuple)) and len(batch) >= 3:
+                x_b, t_b, y_b = batch[0], batch[1], batch[2]
+                if isinstance(x_b, torch.Tensor) and x_b.is_floating_point():
+                    x_b = self.bucketer.transform(x_b)
+                yield (x_b, t_b, y_b)
+            else:
+                yield batch
+
+    def __len__(self):
+        return len(self.dataloader)
+
+    @property
+    def dataset(self):
+        return getattr(self.dataloader, "dataset", None)
+
+
+def prepare_loaders_for_model(
+    model_name: str,
+    args: argparse.Namespace,
+    train_loader,
+    val_loader,
+    test_loader,
+):
+    """Nếu model là CDUM / CPM và features là continuous float, bọc DataLoaders bằng EquidistantBucketer."""
+    if model_name.lower() in ("cdum", "cpm") and not isinstance(train_loader, BucketedDataLoader):
+        num_bins = getattr(args, "cpm_num_bins", 100)
+        bucketer = EquidistantBucketer(num_bins=num_bins)
+
+        # Fit bucketer trên train features nếu là floating point
+        if hasattr(train_loader, "dataset") and hasattr(train_loader.dataset, "X"):
+            x_mat = train_loader.dataset.X
+            if not isinstance(x_mat, torch.Tensor):
+                x_mat = torch.as_tensor(x_mat)
+            if x_mat.is_floating_point():
+                bucketer.fit(x_mat)
+
+        if bucketer.boundaries is None:
+            first_b = next(iter(train_loader))
+            first_x = first_b[0] if isinstance(first_b, (list, tuple)) else first_b
+            if not isinstance(first_x, torch.Tensor):
+                first_x = torch.as_tensor(first_x)
+            if first_x.is_floating_point():
+                bucketer.fit(first_x)
+
+        if bucketer.boundaries is not None:
+            train_loader = BucketedDataLoader(train_loader, bucketer)
+            if val_loader is not None and not isinstance(val_loader, BucketedDataLoader):
+                val_loader = BucketedDataLoader(val_loader, bucketer)
+            if test_loader is not None and not isinstance(test_loader, BucketedDataLoader):
+                test_loader = BucketedDataLoader(test_loader, bucketer)
+
+    return train_loader, val_loader, test_loader
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Run single seed
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -419,6 +585,9 @@ def run_single_seed(
 ) -> dict:
     """Chạy huấn luyện và đánh giá mô hình cho 1 seed cụ thể."""
     set_seed(seed)
+    train_loader, val_loader, test_loader = prepare_loaders_for_model(
+        model_name, args, train_loader, val_loader, test_loader
+    )
     model_lower = model_name.lower()
 
     # Thư mục checkpoint riêng cho seed: results/<model_name>/seed_<seed>
@@ -536,76 +705,102 @@ def run_model(
       - results/summary.csv
     """
     model_lower = model_name.lower()
+    train_loader, val_loader, test_loader = prepare_loaders_for_model(
+        model_name, args, train_loader, val_loader, test_loader
+    )
     model_dir = os.path.join(args.results_dir, model_lower)
     os.makedirs(model_dir, exist_ok=True)
+    log_path = os.path.join(model_dir, "run.log")
 
-    seeds = args.seeds
-    if isinstance(seeds, int):
-        seeds = [seeds]
+    # Tự động ghi logs vào results/<model>/run.log nếu không phải parallel worker
+    is_parallel_worker = os.environ.get("PARALLEL_WORKER") == "1"
+    file_handler = None
+    root_logger = logging.getLogger()
+    if not is_parallel_worker:
+        file_handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(
+            logging.Formatter(
+                fmt='%(asctime)s  %(levelname)-8s  %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S',
+            )
+        )
+        root_logger.addHandler(file_handler)
 
-    logger.info(f"\n{'='*70}")
-    logger.info(f" MODEL: {model_name.upper()} | SEEDS: {seeds}")
-    logger.info(f" Directory: {model_dir}")
-    logger.info(f"{'='*70}")
+    try:
+        seeds = args.seeds
+        if isinstance(seeds, int):
+            seeds = [seeds]
 
-    # 1. Lưu config.json riêng biệt (hyperparameters & options)
-    config_dict = vars(args).copy()
-    config_dict["model_name"] = model_lower
-    config_dict["run_timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    config_path = os.path.join(model_dir, "config.json")
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(config_dict, f, indent=2, ensure_ascii=False, default=str)
-    logger.info(f"Hyperparameters saved to: {config_path}")
+        logger.info(f"\n{'='*70}")
+        logger.info(f" MODEL: {model_name.upper()} | SEEDS: {seeds}")
+        logger.info(f" Directory: {model_dir}")
+        logger.info(f" Run Log:   {log_path}")
+        logger.info(f"{'='*70}")
 
-    # 2. Chạy từng seed
-    raw_results = {}
-    for i, s in enumerate(seeds, start=1):
-        logger.info(f"\n>>> Running {model_name.upper()} — Seed {s} ({i}/{len(seeds)}) ...")
-        res = run_single_seed(model_name, s, args, train_loader, val_loader, test_loader)
-        raw_results[str(s)] = res
+        # 1. Lưu config.json riêng biệt (hyperparameters & options)
+        config_dict = vars(args).copy()
+        config_dict["model_name"] = model_lower
+        config_dict["run_timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        config_path = os.path.join(model_dir, "config.json")
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config_dict, f, indent=2, ensure_ascii=False, default=str)
+        logger.info(f"Hyperparameters saved to: {config_path}")
 
-    # 3. Tính toán summary (mean và std)
-    metric_keys = ["best_epoch", "val_loss", "test_auuc", "test_qini", "test_lift@30"]
-    summary_mean = {}
-    summary_std = {}
+        # 2. Chạy từng seed
+        raw_results = {}
+        for i, s in enumerate(seeds, start=1):
+            logger.info(f"\n>>> Running {model_name.upper()} — Seed {s} ({i}/{len(seeds)}) ...")
+            res = run_single_seed(model_name, s, args, train_loader, val_loader, test_loader)
+            raw_results[str(s)] = res
 
-    for k in metric_keys:
-        vals = [r[k] for r in raw_results.values() if k in r and not np.isnan(r[k])]
-        if vals:
-            summary_mean[k] = round(float(np.mean(vals)), 6)
-            summary_std[k] = round(float(np.std(vals, ddof=1)), 6) if len(vals) > 1 else 0.0
-        else:
-            summary_mean[k] = float("nan")
-            summary_std[k] = float("nan")
+        # 3. Tính toán summary (mean và std)
+        metric_keys = ["best_epoch", "val_loss", "test_auuc", "test_qini", "test_lift@30"]
+        summary_mean = {}
+        summary_std = {}
 
-    summary_section = {
-        "mean": summary_mean,
-        "std": summary_std,
-    }
+        for k in metric_keys:
+            vals = [r[k] for r in raw_results.values() if k in r and not np.isnan(r[k])]
+            if vals:
+                summary_mean[k] = round(float(np.mean(vals)), 6)
+                summary_std[k] = round(float(np.std(vals, ddof=1)), 6) if len(vals) > 1 else 0.0
+            else:
+                summary_mean[k] = float("nan")
+                summary_std[k] = float("nan")
 
-    # 4. Lưu metrics.json (chứa kết quả chi tiết từng seed và tổng hợp mean/std)
-    metrics_record = {
-        "model": model_lower,
-        "seeds": raw_results,
-        "summary": summary_section,
-    }
-    metrics_path = os.path.join(model_dir, "metrics.json")
-    with open(metrics_path, "w", encoding="utf-8") as f:
-        json.dump(metrics_record, f, indent=2, ensure_ascii=False, default=str)
-    logger.info(f"Metrics saved to: {metrics_path}")
+        summary_section = {
+            "mean": summary_mean,
+            "std": summary_std,
+        }
 
-    # 5. Cập nhật vào results/summary.csv
-    summary_csv_path = os.path.join(args.results_dir, "summary.csv")
-    update_summary_csv(summary_csv_path, model_lower, summary_section)
-    logger.info(f"Summary CSV updated at: {summary_csv_path}")
+        # 4. Lưu metrics.json (chứa kết quả chi tiết từng seed và tổng hợp mean/std)
+        metrics_record = {
+            "model": model_lower,
+            "seeds": raw_results,
+            "summary": summary_section,
+        }
+        metrics_path = os.path.join(model_dir, "metrics.json")
+        with open(metrics_path, "w", encoding="utf-8") as f:
+            json.dump(metrics_record, f, indent=2, ensure_ascii=False, default=str)
+        logger.info(f"Metrics saved to: {metrics_path}")
 
-    # Log summary cho model này
-    logger.info("")
-    logger.info(f"--- SUMMARY FOR {model_name.upper()} ({len(seeds)} Seeds) ---")
-    for k in metric_keys:
-        logger.info(f"  {k:15s}: {summary_mean[k]:.5f} ± {summary_std[k]:.5f}")
+        # 5. Cập nhật vào results/summary.csv
+        summary_csv_path = os.path.join(args.results_dir, "summary.csv")
+        update_summary_csv(summary_csv_path, model_lower, summary_section)
+        logger.info(f"Summary CSV updated at: {summary_csv_path}")
 
-    return metrics_record
+        # Log summary cho model này
+        logger.info("")
+        logger.info(f"--- SUMMARY FOR {model_name.upper()} ({len(seeds)} Seeds) ---")
+        for k in metric_keys:
+            logger.info(f"  {k:15s}: {summary_mean[k]:.5f} ± {summary_std[k]:.5f}")
+
+        return metrics_record
+    finally:
+        if file_handler is not None:
+            file_handler.flush()
+            file_handler.close()
+            root_logger.removeHandler(file_handler)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -698,6 +893,9 @@ def run_parallel_experiments(
     else:
         models_to_run = [m.strip().lower() for m in models]
 
+    # Normalize aliases (e.g. cpm -> cdum)
+    models_to_run = ["cdum" if m == "cpm" else m for m in models_to_run]
+
     # Validate models
     for m in models_to_run:
         if m not in ALL_MODELS:
@@ -737,6 +935,7 @@ def run_parallel_experiments(
 
                 cmd = build_subprocess_cmd(model_name, assigned_dev, args)
                 proc_env = os.environ.copy()
+                proc_env["PARALLEL_WORKER"] = "1"
                 proc = subprocess.Popen(
                     cmd,
                     stdout=log_file,
@@ -923,6 +1122,9 @@ def main():
         models_to_run = list(ALL_MODELS)
     else:
         models_to_run = [args.model.lower().strip()]
+
+    # Normalize aliases (e.g. cpm -> cdum)
+    models_to_run = ["cdum" if m == "cpm" else m for m in models_to_run]
 
     # Validate models
     invalid_models = [m for m in models_to_run if m not in ALL_MODELS]

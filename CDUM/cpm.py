@@ -1,4 +1,4 @@
-from typing import Optional 
+from typing import Optional
 import torch
 import torch.nn as nn
 from .experts import UserExpert, GuidanceGate
@@ -9,7 +9,6 @@ class TreatmentTower(nn.Module):
     def __init__(
         self, 
         input_dim: int,
-        hidden_dim: int,
         hidden_dim: int = 32,
         activation: str = "relu",
         dropout_rate: float = 0.0,
@@ -18,12 +17,16 @@ class TreatmentTower(nn.Module):
         super(TreatmentTower, self).__init__()
         
         self.layer1 = nn.Linear(input_dim, hidden_dim)
-        self.relu = nn.ReLU()
+        self.relu = nn.ReLU() if activation.lower() == "relu" else nn.Identity()
+        self.bn = nn.BatchNorm1d(hidden_dim) if use_bn else nn.Identity()
+        self.dropout = nn.Dropout(dropout_rate) if dropout_rate > 0.0 else nn.Identity()
         self.layer2 = nn.Linear(hidden_dim, 1)
         
     def forward(self, mixed: torch.Tensor, e_ind):
         h = self.layer1(mixed)
+        h = self.bn(h)
         h = self.relu(h)
+        h = self.dropout(h)
         
         h = h * e_ind   
         
@@ -34,25 +37,52 @@ class CPM(nn.Module):
     def __init__(self, 
                  num_features: int,
                  num_bins: int,
-                 embedding_dim: int,
+                 embedding_dim: int = 32,
                  
-                 refine_hidden_dim: int,
-                 refine_dim: int,
+                 refine_hidden_dim: int = 64,
+                 refine_dim: int = 32,
                  
-                 num_experts:int,
-                 expert_hidden_dim: int,
-                 expert_dim: int):
+                 num_experts: int = 3,
+                 expert_hidden_dim: int = 128,
+                 expert_dim: int = 64,
+                 tower_hidden_dim: Optional[int] = None,
+                 activation: str = "relu",
+                 dropout_rate: float = 0.0,
+                 use_bn: bool = False):
         super(CPM, self).__init__()
         
+        if tower_hidden_dim is None:
+            tower_hidden_dim = refine_dim  # default 32 to match indicator embedding e_ind
+        
         self.encoder = FeatureEncoder(num_features=num_features, num_bins=num_bins, embedding_dim=embedding_dim)
-        self.treatment_refine = TreatmentRefine(treatment_dim=embedding_dim, hidden_dim = refine_hidden_dim, output_dim = refine_dim)
-        self.user_experts = UserExpert(num_experts=num_experts, input_dim=num_features * embedding_dim, hidden_dim=expert_hidden_dim, expert_dim=expert_dim)
+        self.treatment_refine = TreatmentRefine(treatment_dim=embedding_dim, hidden_dim=refine_hidden_dim, output_dim=refine_dim)
+        self.user_experts = UserExpert(
+            num_experts=num_experts,
+            input_dim=num_features * embedding_dim,
+            hidden_dim=expert_hidden_dim,
+            expert_dim=expert_dim,
+            activation=activation,
+            dropout_rate=dropout_rate,
+            use_bn=use_bn,
+        )
         
         self.control_gate = GuidanceGate(guidance_dim=refine_dim, num_experts=num_experts)
         self.treatment_gate = GuidanceGate(guidance_dim=refine_dim, num_experts=num_experts)
         
-        self.control_tower = TreatmentTower(input_dim = expert_dim, hidden_dim = expert_hidden_dim)
-        self.treatment_tower = TreatmentTower(input_dim= expert_dim, hidden_dim= expert_hidden_dim)
+        self.control_tower = TreatmentTower(
+            input_dim=expert_dim,
+            hidden_dim=tower_hidden_dim,
+            activation=activation,
+            dropout_rate=dropout_rate,
+            use_bn=use_bn,
+        )
+        self.treatment_tower = TreatmentTower(
+            input_dim=expert_dim,
+            hidden_dim=tower_hidden_dim,
+            activation=activation,
+            dropout_rate=dropout_rate,
+            use_bn=use_bn,
+        )
         
     def _forward_treatment(self, 
                            expert_outputs,
