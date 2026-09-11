@@ -1,3 +1,4 @@
+from typing import Optional 
 import torch
 import torch.nn as nn
 from .experts import UserExpert, GuidanceGate
@@ -9,6 +10,10 @@ class TreatmentTower(nn.Module):
         self, 
         input_dim: int,
         hidden_dim: int,
+        hidden_dim: int = 32,
+        activation: str = "relu",
+        dropout_rate: float = 0.0,
+        use_bn: bool = False,
     ):
         super(TreatmentTower, self).__init__()
         
@@ -41,7 +46,7 @@ class CPM(nn.Module):
         
         self.encoder = FeatureEncoder(num_features=num_features, num_bins=num_bins, embedding_dim=embedding_dim)
         self.treatment_refine = TreatmentRefine(treatment_dim=embedding_dim, hidden_dim = refine_hidden_dim, output_dim = refine_dim)
-        self.user_experts = UserExpert(num_experts=num_experts, input_dim=embedding_dim, hidden_dim=expert_hidden_dim, expert_dim=expert_dim)
+        self.user_experts = UserExpert(num_experts=num_experts, input_dim=num_features * embedding_dim, hidden_dim=expert_hidden_dim, expert_dim=expert_dim)
         
         self.control_gate = GuidanceGate(guidance_dim=refine_dim, num_experts=num_experts)
         self.treatment_gate = GuidanceGate(guidance_dim=refine_dim, num_experts=num_experts)

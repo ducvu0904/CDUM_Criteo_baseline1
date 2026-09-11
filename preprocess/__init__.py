@@ -11,6 +11,7 @@ from preprocess.data_loader import (
     load_dataset,
     split_dataset,
 )
+from preprocess.cpm_processor import EquidistantBucketer
 
 __all__ = [
     "CriteoDataset",
@@ -20,5 +21,7 @@ __all__ = [
     "compute_denominators",
     "load_dataset",
     "split_dataset",
+    "EquidistantBucketer",
 ]
+
 

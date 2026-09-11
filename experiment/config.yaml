@@ -15,7 +15,7 @@ data:
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 model:
-  name: "tarnet"           # [tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | slearner | tlearner | all]
+  name: "tarnet"           # [tarnet | cevae | descn | euen | ganite | dragonnet | cfrnet | efin | slearner | tlearner | cpm | all]
   input_dim: 12            # Số chiều feature đầu vào (12 cho Criteo f0..f11)
   shared_dim: 64          # Số neuron trong shared representation
   head_dim: 32            # Số neuron trong outcome heads
@@ -62,6 +62,20 @@ ganite:
 cevae:
   z_dim: 20                # Số chiều không gian tiềm ẩn z
   n_hidden: 3              # Số lớp ẩn trong các sub-networks
+
+# ── CPM (Coarse-grained Preference Modeling — CDUM paper) ─────────────────────
+# Paper: "Coarse-to-fine Dynamic Uplift Modeling" (arXiv:2410.16755)
+# Section 5.1.4 Parameter Settings
+cpm:
+  num_features: 12           # f_x: số features đầu vào (12 cho Criteo f0..f11)           [paper]
+  num_bins: 100              # Số bins cho equidistant bucketing (continuous → sparse)     [not in paper]
+  embedding_dim: 32          # d: embedding dimension                                      [paper: 32]
+  num_experts: 3             # M: số expert modules trong CPM                              [paper: 3]
+  expert_hidden_dim: 64      # Số neuron hidden layer trong mỗi Expert MLP                [not in paper]
+  expert_dim: 32             # d_expert: output dim của mỗi Expert                        [not in paper]
+  refine_hidden_dim: 64      # d_h: hidden dim của Treatment Refine (guidance/indicator)   [not in paper]
+  refine_dim: 64             # d*: output dim của guidance/indicator embedding             [not in paper]
+  huber_delta: 1.0           # δ: Huber loss delta                                         [paper: 1]
 
 # ── Output ────────────────────────────────────────────────────────────────────
 output:
